@@ -1,0 +1,538 @@
+---
+title: "YouthfulCities"
+author: "Kie Gouveia"
+date: "October 31, 2015"
+output: html_document
+---
+
+Set Working Directory 
+
+```{r}
+setwd("C:/Users/Kie/Dropbox/capstone/application")
+
+```
+
+
+
+Importing Data
+
+```{r}
+
+# function below looks to see ifa given package has already been installed prior to attaching. If the package is not installed, it will do so. 
+usePackage <- function(p) {
+    if (!is.element(p, installed.packages()[,1]))
+        install.packages(p, dep = TRUE)
+    library(p, character.only = TRUE)
+}
+
+usePackage("openxlsx") # To import excel files
+
+file <- "./data/2015_YouthfulCities_Index_Ranking_Sheet_Values.xlsx"
+
+wb <- loadWorkbook(file)
+
+sheet.names <- c("Master", "Raw", "Attr.Rank", 
+                 "Attr.Score", "Weighted.Score", 
+                 "Safety","Affordability","Transit",
+                 "Health","Travel","Employment",
+                 "Environment","Education",
+                 "Entrepreneurship","Public.Space",
+                 "Financial.Services","Diversity",
+                 "Digital.Access","Music","Creative.Arts",
+                 "Sports","Film","Civic.Engagement",
+                 "Food.Nightlife","Fashion",
+                 "Youth.Population")
+
+# Create a list of the sheets that have been imported from excel. 
+sheet_list <- lapply(1:length(sheets(wb)), function(x) {
+  readWorkbook(wb, 
+               sheet = x,
+               colNames = TRUE,
+               rowNames = FALSE)
+})
+
+
+# The below assigns names to the imported sheets then exports them as csv files (which are easier to work with than xlsx)
+
+names(sheet_list)[1:26] <- sheet.names[1:26] # I don't believe this is necessary anymore. Double check.
+
+ # test sheet_list$Raw[1:5,1:5]
+
+outfile <- paste("sheet_list$", sheet.names[1], sep="")
+
+write.table(outfile, 
+            file = data[1], 
+            quote = FALSE)
+
+
+sapply(names(sheet_list), function(x) write.csv
+       (sheet_list[[x]],
+       file = paste("./data/YCRank-",x,".csv", sep="")
+))
+
+# TODO: make a check to see if the file is there before completing this step. 
+
+# HOW TO CLOSE WB? sapply(1:length(sheets), function(x) removeWorksheet(wb, x))
+  
+
+```
+
+
+Read in the newly created csv files to dataframes
+
+```{r}
+
+setwd("C:/Users/Kie/Dropbox/capstone/application/data")
+
+filenames <- list.files(pattern = "YCRank")
+
+allSheets <- lapply(filenames, function(i){
+  read.csv(i, header=TRUE)
+})
+
+#TODO Add in nrows to reduce memory usage
+
+# Read in csv files
+
+for (i in 1:length(sheet.names)){
+  name <- paste(sheet.names[i])
+  assign(name, read.csv(file = paste("YCRank-", sheet.names[i], ".csv", sep = ""), 
+                        header = FALSE, 
+                        nrows = 200, 
+                        stringsAsFactors = FALSE))
+}
+
+setwd("C:/Users/Kie/Dropbox/capstone/application") # Reset wd
+
+```
+
+
+Create Lookup Tables
+
+```{r}
+Raw.Clean <- Raw[,-1]
+
+# Create Lookup Table for Indicator Category and Weight
+LU.Ind.Cat.Weight <- Raw[,1:3]
+colnames(LU.Ind.Cat.Weight) <- LU.Ind.Cat.Weight[1, ]
+LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[-1, ]
+LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[, -1]
+
+# Create Country Region look up chart
+LU.Country.Region <- Attr.Score[, 2:3]
+colnames(LU.Country.Region) <- LU.Country.Region[1, ]
+LU.Country.Region <- LU.Country.Region[-1, ]
+
+# Population 
+LU.Population <- Education[-1, ]
+LU.Population <- LU.Population[-1, ]
+LU.Population <- LU.Population[, -1]
+colnames(LU.Population) <- LU.Population[1, ]
+LU.Population <- LU.Population[-1, ]
+LU.Population <- LU.Population[1:55, ]
+colnames(LU.Population)[1] <- c("Country")
+LU.Population <- LU.Population[,c(1,5)]
+
+```
+
+
+Preliminary Cleaning of the Raw Dataset
+
+```{r}
+
+Raw.Clean <- Raw.Clean[,-2]
+Raw.Clean <- Raw.Clean[,-2]
+
+# Raw.Clean$Indicator <- as.character(Raw.Clean$Indicator)
+Raw.Clean <- t(Raw.Clean) # transpose the data
+
+# Assign the top rowto be the column names, then remove redundant top row
+colnames(Raw.Clean) <- Raw.Clean[1, ] 
+Raw.Clean <- Raw.Clean[-1, ]
+
+# Likewise for the row names. 
+row.names(Raw.Clean) <- Raw.Clean[,1]
+Raw.Clean <- Raw.Clean[, -1]
+
+# Convert to dataframe
+Raw.Clean <- as.data.frame(Raw.Clean)
+
+Raw.Clean[, 1:ncol(Raw.Clean)] <-sapply(Raw.Clean[, 1:ncol(Raw.Clean)],
+                                        function(x) as.numeric(as.character(x)))
+```
+
+
+
+Exploratory Analysis
+
+```{r}
+
+library(dplyr)
+
+# Which column have 0's?
+x <- 1:ncol(Raw.Clean)
+zeros <- do.call(cbind, lapply(x, function(i) length(which(Raw.Clean[, i] == 0))))
+
+# Which columns have NA's?
+NAs <- do.call(cbind, lapply(x, function(i) sum(is.na(Raw.Clean[, i] == TRUE))))
+
+# TO DO: Round
+
+```
+
+
+Imputation
+
+Many of the variables contain zeros, some of which are representative of the actual value, others which should be coded as NA. Recoding
+is essential because the zeros will cause distortions during the normalization process and will vias the data. Without recollecting data 
+common sense must be used in recoding the data.
+
+```{r}
+
+# Raw.Cleaned <- Raw.Clean IGNORE
+# Raw.Cleaned -> Raw.Clean IGNORE
+
+# food.safety
+row.names(Raw.Clean[Raw.Clean$food.safety == 0, ])
+  # likely a case of missing data, replace with NA
+Raw.Clean$food.safety[Raw.Clean$food.safety == 0] <- NA
+
+# homicides - it is unlikely that there were no homicides, replace 0 with NA
+Raw.Clean$homicides[Raw.Clean$homicides == 0] <- NA
+row.names(Raw.Clean[is.na(Raw.Clean$homicides), ])
+
+# km.transit 
+row.names(Raw.Clean[Raw.Clean$km.transit == 0, ]) 
+  # these countries have (limited) transit, replace with NA
+Raw.Clean$km.transit[Raw.Clean$km.transit == 0] <- NA
+
+# hrs.transit 
+row.names(Raw.Clean[Raw.Clean$hrs.transit == 0, ]) 
+  # these countries have (limited) transit, replace with NA
+Raw.Clean$hrs.transit[Raw.Clean$hrs.transit == 0] <- NA
+
+# bike.rental
+row.names(Raw.Clean[Raw.Clean$bike.rental == 0, ]) 
+  # feasible that (some of) these are zero, left unchanged
+
+# km.bike.path
+row.names(Raw.Clean[Raw.Clean$km.bike.path == 0, ]) 
+  # feasible that (some of) these are zero, left unchanged
+
+# commute.time.transit
+row.names(Raw.Clean[Raw.Clean$commute.time.transit == 0, ]) 
+  # feasible that this is zero due to transit being unfeasible for commute, left unchanged
+
+# commute.time.transit
+row.names(Raw.Clean[Raw.Clean$transit.app == 0, ]) 
+  # feasible that this is zero, left unchanged
+
+# taxi.rate
+row.names(Raw.Clean[Raw.Clean$taxi.rate == 0, ]) 
+  # these cities have taxis, convert 0's to NA's
+Raw.Clean$taxi.rate[Raw.Clean$taxi.rate == 0] <- NA
+
+# health.clinics
+row.names(Raw.Clean[Raw.Clean$health.clinics == 0, ]) 
+  # these cities have health clinics, convert 0's to NA's
+Raw.Clean$health.clinics[Raw.Clean$health.clinics == 0] <- NA
+
+# sex.health.clinics
+row.names(Raw.Clean[Raw.Clean$sex.health.clinic == 0, ]) 
+  # feasible, left unchanged
+
+# sex.homeless.shelter
+row.names(Raw.Clean[Raw.Clean$homeless.shelter == 0, ]) 
+  # possible, left unchanged
+
+# employment.programs
+row.names(Raw.Clean[Raw.Clean$employment.programs == 0, ]) 
+  # possible, left unchanged
+
+# youth.employment.centers
+row.names(Raw.Clean[Raw.Clean$youth.employment.centers == 0, ]) 
+  # several of these definitely have youth employment centers, convert to NA
+Raw.Clean$youth.employment.centers[Raw.Clean$youth.employment.centers == 0] <- NA
+
+# new.jobs.2013
+row.names(Raw.Clean[Raw.Clean$new.jobs.2013 == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$new.jobs.2013[Raw.Clean$new.jobs.2013 == 0] <- NA
+
+# water.scale
+row.names(Raw.Clean[Raw.Clean$water.scale == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$water.scale[Raw.Clean$water.scale == 0] <- NA
+
+# smart.cities.scale
+row.names(Raw.Clean[Raw.Clean$smart.cities.scale == 0, ]) 
+  # feasible that there  are not policies in place, left unchanged
+
+# qty.recylced.materials
+row.names(Raw.Clean[Raw.Clean$qty.recylced.materials == 0, ]) 
+  # feasible, left unchanged
+
+# qty.annual.waste
+row.names(Raw.Clean[Raw.Clean$qty.annual.waste == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$qty.annual.waste[Raw.Clean$qty.annual.waste == 0] <- NA
+
+# carbon.emissions
+row.names(Raw.Clean[Raw.Clean$carbon.emissions == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$carbon.emissions[Raw.Clean$carbon.emissions == 0] <- NA
+
+#num.recylced.materials
+row.names(Raw.Clean[Raw.Clean$num.recylced.materials == 0, ]) 
+  #feasible, left unchanged
+
+#registered.vehicles
+row.names(Raw.Clean[Raw.Clean$registered.vehicles == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$registered.vehicles[Raw.Clean$registered.vehicles == 0] <- NA
+
+# tuition.cost
+row.names(Raw.Clean[Raw.Clean$tuition.cost == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$registered.vehicles[Raw.Clean$tuition.cost == 0] <- NA
+
+# undergrad.enrollment
+row.names(Raw.Clean[Raw.Clean$undergrad.enrollment == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$undergrad.enrollment[Raw.Clean$undergrad.enrollment == 0] <- NA
+
+# student.housing
+row.names(Raw.Clean[Raw.Clean$student.housing == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$student.housing[Raw.Clean$student.housing == 0] <- NA
+
+# student.debt
+row.names(Raw.Clean[Raw.Clean$student.debt == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$student.debt[Raw.Clean$student.debt == 0] <- NA
+
+# employment.initiatives.scale
+row.names(Raw.Clean[Raw.Clean$employment.initiatives.scale == 0, ]) 
+  # possible, left unchanged
+
+# age.register.business
+row.names(Raw.Clean[Raw.Clean$age.register.business == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$age.register.business[Raw.Clean$age.register.business == 0] <- NA
+
+# early.entrepreneurship
+row.names(Raw.Clean[Raw.Clean$early.entrepreneurship == 0, ]) 
+  # possible, left unchanged
+
+# sports.facilities
+row.names(Raw.Clean[Raw.Clean$sports.facilities == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$sports.facilities[Raw.Clean$sports.facilities == 0] <- NA
+
+# business.banking
+row.names(Raw.Clean[Raw.Clean$business.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$business.banking[Raw.Clean$business.banking == 0] <- NA
+
+# personal.banking
+row.names(Raw.Clean[Raw.Clean$personal.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$personal.banking[Raw.Clean$personal.banking == 0] <- NA
+
+# chartered.banks
+row.names(Raw.Clean[Raw.Clean$chartered.banks == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$chartered.banks[Raw.Clean$chartered.banks == 0] <- NA
+
+# online.banking
+row.names(Raw.Clean[Raw.Clean$online.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$online.banking[Raw.Clean$online.banking == 0] <- NA
+
+# mobile.banking
+row.names(Raw.Clean[Raw.Clean$mobile.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$mobile.banking[Raw.Clean$mobile.banking == 0] <- NA
+
+# financial.literacy
+row.names(Raw.Clean[Raw.Clean$financial.literacy == 0, ]) 
+  # possible, left unchanged
+
+# cellular.package.cost
+row.names(Raw.Clean[Raw.Clean$cellular.package.cost == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$cellular.package.cost[Raw.Clean$cellular.package.cost == 0] <- NA
+
+# num.nightclubs
+row.names(Raw.Clean[Raw.Clean$num.nightclubs == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$num.nightclubs[Raw.Clean$num.nightclubs == 0] <- NA
+
+# music.festivals
+row.names(Raw.Clean[Raw.Clean$music.festivals == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$music.festivals[Raw.Clean$music.festivals == 0] <- NA
+
+# graffiti.street.art
+row.names(Raw.Clean[Raw.Clean$graffiti.street.art == 0, ]) 
+  # feasible, left unchanged
+
+# number.pro.sports.teams
+row.names(Raw.Clean[Raw.Clean$number.pro.sports.teams == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$number.pro.sports.teams[Raw.Clean$number.pro.sports.teams == 0] <- NA
+
+# film.festivals
+row.names(Raw.Clean[Raw.Clean$film.festivals == 0, ]) 
+  # likely a case of missing data
+Raw.Clean$film.festivals[Raw.Clean$film.festivals == 0] <- NA
+
+# councillor.age
+row.names(Raw.Clean[Raw.Clean$councillor.age == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$councillor.age[Raw.Clean$councillor.age == 0] <- NA
+
+# volunteer.opportunities
+row.names(Raw.Clean[Raw.Clean$volunteer.opportunities == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$volunteer.opportunities[Raw.Clean$volunteer.opportunities == 0] <- NA
+
+# youth.advisory.board
+row.names(Raw.Clean[Raw.Clean$youth.advisory.board == 0, ]) 
+  # feasible, left unchanged
+
+# highschool.volunteer
+row.names(Raw.Clean[Raw.Clean$highschool.volunteer == 0, ]) 
+  # left unchanged
+
+# num.restaurants
+row.names(Raw.Clean[Raw.Clean$num.restaurants == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$num.restaurants[Raw.Clean$num.restaurants == 0] <- NA
+
+# last.call.index
+row.names(Raw.Clean[Raw.Clean$last.call.index == 0, ]) 
+  # potentially no legislated last call, left unchanged
+
+# num.food.festival
+row.names(Raw.Clean[Raw.Clean$num.food.festival == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$num.food.festival[Raw.Clean$num.food.festival == 0] <- NA
+
+# young.designer
+row.names(Raw.Clean[Raw.Clean$young.designer == 0, ]) 
+  # possible, left unchanged
+
+# fashion.incubators
+row.names(Raw.Clean[Raw.Clean$fashion.incubators == 0, ]) 
+  # possible, left unchanged
+
+# design.schools
+row.names(Raw.Clean[Raw.Clean$design.schools == 0, ]) 
+  # possible, left unchanged
+
+```
+
+Are all variables necessary?
+
+```{r}
+
+
+```
+
+
+Multiple Imputations
+
+
+```{r}
+
+#population and region maybe be useful for the imputation algorithm, so they will be attached to the raw dataset here. 
+
+data.full <- cbind(Raw.Clean, LU.Population[, 2]) 
+
+str(data.full[,101])
+colnames(data.full)[101] <- "Population"
+
+data.full <- cbind(data.full, LU.Country.Region[, 2])
+str(data.full[,102])
+colnames(data.full)[102] <- "Region"
+
+
+data.full$Population <- as.numeric(as.character((data.full$Population)))
+str(data.full$Population)
+
+```
+
+Attempting to utilize the 'mi' Package to perform multipl imputation. 
+
+```{r}
+usePackage("mi")
+
+# Safety
+
+# create missing dataframe object which is necessary for the mi function. contains extra metadata such as number of missing variables.
+mdf.safety <- missing_data.frame(data.full[, c(1,2,3,4,101,102)]) 
+
+show(mdf.safety)
+
+summary(mdf.safety)
+image(mdf.safety) 
+
+imp.safety <- mi(mdf.safety, n.iter = 30, n.chains = 5, max.minutes = 20, seed = 001) # run multiple imputation
+
+show(imp.safety)
+
+round(mipply(imp.safety, mean, to.matrix = TRUE), 3)
+
+Rhats(imp.safety) # check to see if the multiple imputation performed well
+mi2BUGS(imp.safety, statistic = c("moments", "imputations", "parameters"))
+
+plot(imp.safety)
+
+analysis <- pool(food.safety ~ road.death + homicides + suicides + Population + Region, data = imp.safety, m = 5)
+
+complete(imp.safety)
+
+dfs <- complete(imp.safety) # each chain on the multiple imputation
+
+
+# mdf <- change(mdf, 
+ #             y = c("employment.programs", "employment.initiatives.scale", "openness.lgbtq"), 
+ #            what = "type", 
+ #            to = c("continuous", "continuous", "ordered-categorical"))
+
+
+
+```
+
+
+
+Correlation Analysis
+
+```{r}
+usePackage("corrgram")
+usePackage("dplyr")
+
+LU.Ind.Cat.Weight[LU.Ind.Cat.Weight$Category == "Safety", ]
+
+safety <- LU.Ind.Cat.Weight %>%
+  filter(Category == "Safety")
+
+which(colnames(Raw.Clean) == safety$Indicator)
+
+corrgram(Raw.Clean[, which(colnames(Raw.Clean) == safety$Indicator)])
+
+corrplot(cor(Raw.Clean[, 1:ncol(Raw.Clean)]), method="ellipse")
+
+
+
+```
+
+
+Imputing Data
+
+```{r}
+
+
+```
+
