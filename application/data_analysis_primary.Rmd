@@ -9,7 +9,7 @@ Set Working Directory
 
 ```{r}
 setwd("C:/Users/Kie/Dropbox/capstone/application")
-
+set.seed(101)
 ```
 
 
@@ -113,7 +113,7 @@ Create Lookup Tables
 Raw.Clean <- Raw[,-1]
 
 # Create Lookup Table for Indicator Category and Weight
-LU.Ind.Cat.Weight <- Raw[,1:3]
+LU.Ind.Cat.Weight <- Raw[,1:4]
 colnames(LU.Ind.Cat.Weight) <- LU.Ind.Cat.Weight[1, ]
 LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[-1, ]
 LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[, -1]
@@ -283,7 +283,9 @@ row.names(Raw.Clean[Raw.Clean$carbon.emissions == 0, ])
 Raw.Clean$carbon.emissions[Raw.Clean$carbon.emissions == 0] <- NA
 
 #num.recylced.materials
-row.names(Raw.Clean[Raw.Clean$num.recylced.materials == 0, ]) 
+row.names(Raw.Clean[Raw.Clean$num.recylced.materials == 0, ])
+  # almost certainly a case of missing data
+Raw.Clean$num.recylced.materials[Raw.Clean$num.recylced.materials == 0] <- NA
   #feasible, left unchanged
 
 #registered.vehicles
@@ -433,20 +435,11 @@ row.names(Raw.Clean[Raw.Clean$design.schools == 0, ])
 
 ```
 
-Are all variables necessary?
+Preparing for imputation
 
 ```{r}
 
-
-```
-
-
-Multiple Imputations
-
-
-```{r}
-
-#population and region maybe be useful for the imputation algorithm, so they will be attached to the raw dataset here. 
+# population and region maybe be useful for the imputation algorithm, so they will be attached to the raw dataset here. 
 
 data.full <- cbind(Raw.Clean, LU.Population[, 2]) 
 
@@ -463,43 +456,124 @@ str(data.full$Population)
 
 ```
 
-Attempting to utilize the 'mi' Package to perform multipl imputation. 
+
+
+Testing current imputation strategy
+
+
 
 ```{r}
-usePackage("mi")
 
-# Safety
+usePackage('VIM')
 
-# create missing dataframe object which is necessary for the mi function. contains extra metadata such as number of missing variables.
-mdf.safety <- missing_data.frame(data.full[, c(1,2,3,4,101,102)]) 
-
-show(mdf.safety)
-
-summary(mdf.safety)
-image(mdf.safety) 
-
-imp.safety <- mi(mdf.safety, n.iter = 30, n.chains = 5, max.minutes = 20, seed = 001) # run multiple imputation
-
-show(imp.safety)
-
-round(mipply(imp.safety, mean, to.matrix = TRUE), 3)
-
-Rhats(imp.safety) # check to see if the multiple imputation performed well
-mi2BUGS(imp.safety, statistic = c("moments", "imputations", "parameters"))
-
-plot(imp.safety)
-
-analysis <- pool(food.safety ~ road.death + homicides + suicides + Population + Region, data = imp.safety, m = 5)
-
-complete(imp.safety)
-
-dfs <- complete(imp.safety) # each chain on the multiple imputation
+# create a function that is designed to introduce NA's to up to 20% of the column
 
 
-# mdf <- change(mdf, 
- #             y = c("employment.programs", "employment.initiatives.scale", "openness.lgbtq"), 
- #            what = "type", 
- #            to = c("continuous", "continuous", "ordered-categorical"))
+
+
+# Imputation Experiment - Insert NAs
+#---------------------------------
+
+insert_nas <- function(x) {
+  len <- length(x)
+  n <- sample(1:floor(0.2*len), 1)
+  i <- sample(1:len, n)
+  x[i] <- NA 
+  x
+}
+
+
+data.NA <- as.data.frame(apply(data.full[1:100], 2, function(x) insert_nas(x)))
+data.NA[, c("Population", "Region")] <- data.full[,c("Population", "Region")]
+
+
+
+
+########### ALL ##############
+
+m.impute <- data.frame()
+
+for (c in 1:ncol(data.NA)) {
+
+  for (r in 1:length(data.NA[, c])) {
+
+    if (is.na(data.NA[r,c])) {     # if it is NA, continue
+      
+      m.impute[r,c] <- as.numeric(mean(data.full[data.full$Region == data.full[r, "Region"], c], na.rm = TRUE))
+
+    } else {  #if not NA, keep the same as original dataset
+      m.impute[r, c] <- as.numeric(data.full[r, c])
+      
+      
+    }
+  }
+}
+
+m.impute
+
+length(which(is.na(m.impute)))
+
+
+# mean(data.full$food.safety[
+#   data.full$Region == 
+#     data.full[4, "Region"]], na.rm = TRUE)
+
+
+
+
+
+
+########### KNN ALL ############
+
+k.impute <- list()
+
+for (i in 1:100){
+  df <- as.data.frame(data.NA[ ,c(i, 101, 102)])
+  vec <- kNN(df, 1, k = 4)
+  k.impute[[i]] <- vec[, 1]
+}
+
+
+k.impute <- do.call("cbind",k.impute)
+k.impute <- as.data.frame(k.impute)
+
+
+length(which(is.na(k.impute)))
+
+####### Comparison ALL ############
+
+range <- apply(data.NA[ ,1:100], 2, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+
+# m.impute
+mse.m <- (m.impute[ ,1:100] - data.full[ ,1:100])^2
+mse.m <- apply(mse.m, 2, function(x) sum(x, na.rm = TRUE))
+rmse.m <- sqrt(mse.m)
+nrmse.m <- rmse.m/range
+
+#k.impute
+
+mse.k <- (k.impute[ ,1:100] - data.full[ ,1:100])^2
+mse.k <- apply(mse.k, 2, function(x) sum(x, na.rm = TRUE))
+rmse.k <- sqrt(mse.k)
+nrmse.k <- rmse.k/range
+
+results <- as.data.frame((cbind(nrmse.m, nrmse.k)))
+
+library(reshape2)
+
+results[,"id"] <- 1:nrow(results)
+
+results.melt <- as.data.frame(melt(results, id.vars = "id"))
+
+dev.off()
+
+g <- ggplot(results.melt, aes(x = id, y = value, colour = variable))
+g + geom_line() + geom_smooth()
+
+
+qplot(results.melt)
+
+# looks like mean imputation is better. 
 
 
 
@@ -507,32 +581,177 @@ dfs <- complete(imp.safety) # each chain on the multiple imputation
 
 
 
-Correlation Analysis
+Imputing the data
 
 ```{r}
-usePackage("corrgram")
-usePackage("dplyr")
+data.impute <- data.frame()
 
-LU.Ind.Cat.Weight[LU.Ind.Cat.Weight$Category == "Safety", ]
+for (c in 1:ncol(data.full)) {
 
-safety <- LU.Ind.Cat.Weight %>%
-  filter(Category == "Safety")
+  for (r in 1:length(data.full[, c])) {
 
-which(colnames(Raw.Clean) == safety$Indicator)
+    if (is.na(data.full[r,c])) {     # if it is NA, continue
+      
+      data.impute[r,c] <- as.numeric(mean(data.full[data.full$Region == data.full[r, "Region"], c], na.rm = TRUE))
 
-corrgram(Raw.Clean[, which(colnames(Raw.Clean) == safety$Indicator)])
+    } else {  #if not NA, keep the same as original dataset
+      data.impute[r, c] <- as.numeric(data.full[r, c])
+      
+      
+    }
+  }
+}
 
-corrplot(cor(Raw.Clean[, 1:ncol(Raw.Clean)]), method="ellipse")
+colnames(data.impute) <- colnames(data.full)
+row.names(data.impute) <- row.names(data.full)
 
 
+length(which(is.na(data.impute)))
 
 ```
 
 
-Imputing Data
+Setting up Normalization Functions
 
 ```{r}
 
+t <- vector()
 
+min.norm <- function(col) {
+  ( (100 - (data.impute[r, col] - 
+                      min(data.impute[, col]) )) * 
+              (100 / (max(data.impute[, col]) - 
+                        min(data.impute[, col])) ) ) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("road.death")
+  norm.road.death <- t
+}
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("cost.movie")
+  norm.cost.movie <- t
+}
+
+
+for (r in 1:length(data.impute[, "homicides"])) {
+   t[r] <- ( (100 - (data.impute[r, "homicides"] - 
+                       min(data.impute[, "homicides"]) )) * 
+               (100 / (max(data.impute[, "homicides"]) - 
+                         min(data.impute[, "homicides"])) ) ) *
+
+ as.numeric(LU.Ind.Cat.Weight[
+   LU.Ind.Cat.Weight$Indicator == "homicides",  "Weight"])
+  
+ }
+
+max(data.impute$homicides) min(data.impute$homicides)
+
+# t
+
+# max(data.impute$road.death) - min(data.impute$road.death)
+
+
+ ### FEATURE SCALING - RESCALING
+
+
+# Normalize - Reward Smaller Values
+min.norm <- function(col) {
+  (1 - (( data.impute[r, col] - 
+      min(data.impute[, col]) ) / 
+              (max(data.impute[, col]) - 
+                        min(data.impute[, col])))) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+# Normalize - Reward Larger Values
+
+max.norm <- function(col) {
+  ( data.impute[r, col] - 
+      min(data.impute[, col]) ) / 
+              (max(data.impute[, col]) - 
+                        min(data.impute[, col])) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+# Normalize by Population - Reward Smaller Values WORK ON THIS 
+
+pop.min.norm <- function(col) {
+  (data.impute[r, col]/data.impute[r, "Population"]) *
+  (1 - ((data.impute[r, col] - 
+      min(data.impute[, col]) ) / 
+              (max(data.impute[, col]) - 
+                        min(data.impute[, col])))) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+# Normalize by Population- Reward Larger Values   WORK ON THIS
+
+pop.max.norm <- function(col) {
+  homicide.capita <- (data.impute[r, col] /
+    data.impute[r, "Population"])* 100000 
+  
+  (homicides.capita - min(homicides.capita)) / (max(popNorm) - min(popNorm)) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+
+
+----------------------
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("road.death")
+  norm.road.death <- t
+}
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("c.tax.rate")
+  norm.c.tax.rate <- t
+}
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("age.register.business")
+  norm.age.register.business <- t
+}
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.recylced.materials")
+  norm.num.recycled.materials <- t
+}
+
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- pop.min.norm("homicides")
+  norm.homicides <- t
+}
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
