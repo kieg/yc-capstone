@@ -133,6 +133,21 @@ LU.Population <- LU.Population[1:55, ]
 colnames(LU.Population)[1] <- c("Country")
 LU.Population <- LU.Population[,c(1,5)]
 
+# Exchange Rate and Minimum Wage
+LU.Exchange.Wage <- Affordability[,c(2,11,13)]
+LU.Exchange.Wage <- LU.Exchange.Wage[3:57, ]
+
+colnames(LU.Exchange.Wage) <- c("Country", "Exchange", "Minimum.Wage")
+
+
+LU.Exchange.Wage$Exchange <- as.numeric(as.character(LU.Exchange.Wage$Exchange))
+
+LU.Exchange.Wage$Minimum.Wage <- as.numeric(as.character(LU.Exchange.Wage$Minimum.Wage))
+
+LU.Exchange.Wage$Exchange <-round(LU.Exchange.Wage$Exchange, 2)
+
+LU.Exchange.Wage$Minimum.Wage <-round(LU.Exchange.Wage$Minimum.Wage, 2)
+
 ```
 
 
@@ -460,15 +475,11 @@ str(data.full$Population)
 
 Testing current imputation strategy
 
-
-
 ```{r}
 
 usePackage('VIM')
 
 # create a function that is designed to introduce NA's to up to 20% of the column
-
-
 
 
 # Imputation Experiment - Insert NAs
@@ -615,52 +626,11 @@ Setting up Normalization Functions
 
 ```{r}
 
-t <- vector()
-
-min.norm <- function(col) {
-  ( (100 - (data.impute[r, col] - 
-                      min(data.impute[, col]) )) * 
-              (100 / (max(data.impute[, col]) - 
-                        min(data.impute[, col])) ) ) *
-
-as.numeric(LU.Ind.Cat.Weight[
-  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
-}
-
-
-for (r in 1:nrow(data.impute)) {
-  t[r] <- min.norm("road.death")
-  norm.road.death <- t
-}
-
-for (r in 1:nrow(data.impute)) {
-  t[r] <- min.norm("cost.movie")
-  norm.cost.movie <- t
-}
-
-
-for (r in 1:length(data.impute[, "homicides"])) {
-   t[r] <- ( (100 - (data.impute[r, "homicides"] - 
-                       min(data.impute[, "homicides"]) )) * 
-               (100 / (max(data.impute[, "homicides"]) - 
-                         min(data.impute[, "homicides"])) ) ) *
-
- as.numeric(LU.Ind.Cat.Weight[
-   LU.Ind.Cat.Weight$Indicator == "homicides",  "Weight"])
-  
- }
-
-max(data.impute$homicides) min(data.impute$homicides)
-
-# t
-
-# max(data.impute$road.death) - min(data.impute$road.death)
-
-
  ### FEATURE SCALING - RESCALING
 
+data.impute.transform <- data.impute
 
-# Normalize - Reward Smaller Values
+# Normalize Minimize - Reward Smaller Values
 min.norm <- function(col) {
   (1 - (( data.impute[r, col] - 
       min(data.impute[, col]) ) / 
@@ -671,7 +641,7 @@ as.numeric(LU.Ind.Cat.Weight[
   LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
 }
 
-# Normalize - Reward Larger Values
+# Normalize Maximize - Reward Larger Values
 
 max.norm <- function(col) {
   ( data.impute[r, col] - 
@@ -683,60 +653,94 @@ as.numeric(LU.Ind.Cat.Weight[
   LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
 }
 
-# Normalize by Population - Reward Smaller Values WORK ON THIS 
+# Normalize by Population
 
-pop.min.norm <- function(col) {
-  (data.impute[r, col]/data.impute[r, "Population"]) *
-  (1 - ((data.impute[r, col] - 
-      min(data.impute[, col]) ) / 
-              (max(data.impute[, col]) - 
-                        min(data.impute[, col])))) *
-
-as.numeric(LU.Ind.Cat.Weight[
-  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+by.per.capita <- function(col) {
+  (data.impute[r, col] /
+    data.impute[r, "Population"])* 100000
 }
 
-# Normalize by Population- Reward Larger Values   WORK ON THIS
+per.capita <- vector()
 
-pop.max.norm <- function(col) {
-  homicide.capita <- (data.impute[r, col] /
-    data.impute[r, "Population"])* 100000 
-  
-  (homicides.capita - min(homicides.capita)) / (max(popNorm) - min(popNorm)) *
 
-as.numeric(LU.Ind.Cat.Weight[
-  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+# Normalize by Exchange and Minimum Wage
+
+
+by.exchange <- function(col) {
+  (data.impute[r, col] *
+    LU.Exchange.Wage[r, "Exchange"]) / LU.Exchange.Wage[r, "Minimum.Wage"]
 }
+
+
+  (data.impute[1, "cellular.cost"] *
+    LU.Exchange.Wage[1, "Exchange"]) / LU.Exchange.Wage[1, "Minimum.Wage"]
 
 
 
 ----------------------
-
+#### Minimize EXAMPLE - Road.Death###
 for (r in 1:nrow(data.impute)) {
   t[r] <- min.norm("road.death")
   norm.road.death <- t
 }
 
+# Consumer Tax Rate
 for (r in 1:nrow(data.impute)) {
   t[r] <- min.norm("c.tax.rate")
   norm.c.tax.rate <- t
 }
 
+# Age Register
 for (r in 1:nrow(data.impute)) {
   t[r] <- min.norm("age.register.business")
   norm.age.register.business <- t
 }
 
+### MAXIMIZE EXAMPLE ###
 for (r in 1:nrow(data.impute)) {
   t[r] <- max.norm("num.recylced.materials")
   norm.num.recycled.materials <- t
 }
 
 
+### POPULATION ADJUSTED METHOD - Homicides Example ### 
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("homicides")
+  homicides.per.capita <- t
+}
+
+data.impute[, "homicides"] <- homicides.per.capita
+
+# minimze
 for (r in 1:nrow(data.impute)) {
-  t[r] <- pop.min.norm("homicides")
+  t[r] <- min.norm("homicides")
   norm.homicides <- t
 }
+
+
+### EXCHANGE ADJUSTED METHOD - Homicides Example ### 
+
+t <- vector()
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cellular.cost")
+  cellular.cost.exchange <- t
+}
+
+# cost per minute (US) as a percentage of minimum wage
+data.impute.transform[, "cellular.cost"] <- cellular.cost.exchange
+
+# minimze
+
+t <- vector()
+
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cellular.cost")
+  norm.cellular <- t
+}
+
 ```
 
 

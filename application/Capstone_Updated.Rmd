@@ -1,0 +1,2175 @@
+---
+title: "YouthfulCities"
+author: "Kie Gouveia"
+date: "October 31, 2015"
+output: html_document
+---
+
+Set Working Directory 
+
+```{r}
+setwd("C:/Users/Kie/Dropbox/capstone/application")
+set.seed(101)
+```
+
+
+
+Importing Data
+
+```{r}
+
+# function below looks to see ifa given package has already been installed prior to attaching. If the package is not installed, it will do so. 
+usePackage <- function(p) {
+    if (!is.element(p, installed.packages()[,1]))
+        install.packages(p, dep = TRUE)
+    library(p, character.only = TRUE)
+}
+
+usePackage("openxlsx") # To import excel files
+
+file <- "./data/2015_YouthfulCities_Index_Ranking_Sheet_Values.xlsx"
+
+wb <- loadWorkbook(file)
+
+sheet.names <- c("Master", "Raw", "Attr.Rank", 
+                 "Attr.Score", "Weighted.Score", 
+                 "Safety","Affordability","Transit",
+                 "Health","Travel","Employment",
+                 "Environment","Education",
+                 "Entrepreneurship","Public.Space",
+                 "Financial.Services","Diversity",
+                 "Digital.Access","Music","Creative.Arts",
+                 "Sports","Film","Civic.Engagement",
+                 "Food.Nightlife","Fashion",
+                 "Youth.Population")
+
+# Create a list of the sheets that have been imported from excel. 
+sheet_list <- lapply(1:length(sheets(wb)), function(x) {
+  readWorkbook(wb, 
+               sheet = x,
+               colNames = TRUE,
+               rowNames = FALSE)
+})
+
+
+# The below assigns names to the imported sheets then exports them as csv files (which are easier to work with than xlsx)
+
+names(sheet_list)[1:26] <- sheet.names[1:26] # I don't believe this is necessary anymore. Double check.
+
+ # test sheet_list$Raw[1:5,1:5]
+
+outfile <- paste("sheet_list$", sheet.names[1], sep="")
+
+sapply(names(sheet_list), function(x) write.csv
+       (sheet_list[[x]],
+       file = paste("./data/YCRank-",x,".csv", sep="")
+))
+
+# TODO: make a check to see if the file is there before completing this step. 
+
+# HOW TO CLOSE WB? sapply(1:length(sheets), function(x) removeWorksheet(wb, x))
+  
+
+```
+
+
+Read in the newly created csv files to dataframes
+
+```{r}
+
+setwd("C:/Users/Kie/Dropbox/capstone/application/data")
+
+filenames <- list.files(pattern = "YCRank")
+
+allSheets <- lapply(filenames, function(i){
+  read.csv(i, header=TRUE)
+})
+
+#TODO Add in nrows to reduce memory usage
+
+# Read in csv files
+
+for (i in 1:length(sheet.names)){
+  name <- paste(sheet.names[i])
+  assign(name, read.csv(file = paste("YCRank-", sheet.names[i], ".csv", sep = ""), 
+                        header = FALSE, 
+                        nrows = 200, 
+                        stringsAsFactors = FALSE))
+}
+
+setwd("C:/Users/Kie/Dropbox/capstone/application") # Reset wd
+
+```
+
+
+Create Lookup Tables
+
+```{r}
+
+
+# Create Lookup Table for Indicator Category and Weight
+LU.Ind.Cat.Weight <- Raw[,1:4]
+colnames(LU.Ind.Cat.Weight) <- LU.Ind.Cat.Weight[1, ]
+LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[-1, ]
+LU.Ind.Cat.Weight <- LU.Ind.Cat.Weight[, -1]
+
+# Create Country Region look up chart
+LU.Country.Region <- Attr.Score[, 2:3]
+colnames(LU.Country.Region) <- LU.Country.Region[1, ]
+LU.Country.Region <- LU.Country.Region[-1, ]
+
+# Population 
+LU.Population <- Education[-1, ]
+LU.Population <- LU.Population[-1, ]
+LU.Population <- LU.Population[, -1]
+colnames(LU.Population) <- LU.Population[1, ]
+LU.Population <- LU.Population[-1, ]
+LU.Population <- LU.Population[1:55, ]
+colnames(LU.Population)[1] <- c("Country")
+LU.Population <- LU.Population[,c(1,5)]
+
+# Exchange Rate and Minimum Wage
+LU.Exchange.Wage <- Affordability[1:57,c(2,11,13)]
+Area <- Transit[1:57, 23]
+LU.Exchange.Wage <- cbind(LU.Exchange.Wage, Area)
+LU.Exchange.Wage <- LU.Exchange.Wage[-1, ]
+LU.Exchange.Wage <- LU.Exchange.Wage[-1, ]
+colnames(LU.Exchange.Wage) <- c("Country", "Exchange", "Minimum.Wage", "Area")
+
+
+LU.Exchange.Wage$Exchange <- as.numeric(as.character(LU.Exchange.Wage$Exchange))
+LU.Exchange.Wage$Minimum.Wage <- as.numeric(as.character(LU.Exchange.Wage$Minimum.Wage))
+
+LU.Exchange.Wage[, 2:ncol(LU.Exchange.Wage)] <-sapply(LU.Exchange.Wage[, 2:ncol(LU.Exchange.Wage)],
+                                        function(x) as.numeric(as.character(x)))
+
+```
+
+
+Preliminary Cleaning of the Raw Dataset
+
+```{r}
+Raw.Clean <- Raw[,-1]
+Raw.Clean <- Raw.Clean[,-2]
+Raw.Clean <- Raw.Clean[,-2]
+
+# Raw.Clean$Indicator <- as.character(Raw.Clean$Indicator)
+Raw.Clean <- t(Raw.Clean) # transpose the data
+
+# Assign the top rowto be the column names, then remove redundant top row
+colnames(Raw.Clean) <- Raw.Clean[1, ] 
+Raw.Clean <- Raw.Clean[-1, ]
+
+# Likewise for the row names. 
+row.names(Raw.Clean) <- Raw.Clean[,1]
+Raw.Clean <- Raw.Clean[, -1]
+
+# Convert to dataframe
+Raw.Clean <- as.data.frame(Raw.Clean)
+
+Raw.Clean[, 1:ncol(Raw.Clean)] <- sapply(Raw.Clean[, 1:ncol(Raw.Clean)], function(x)  gsub(",", "", x))
+Raw.Clean[, 1:ncol(Raw.Clean)] <-sapply(Raw.Clean[, 1:ncol(Raw.Clean)],
+                                        function(x) as.numeric(as.character(x)))
+
+
+```
+
+
+
+Exploratory Analysis
+
+```{r}
+
+library(dplyr)
+
+# Which column have 0's?
+x <- 1:ncol(Raw.Clean)
+zeros <- do.call(cbind, lapply(x, function(i) length(which(Raw.Clean[, i] == 0))))
+
+# Which columns have NA's?
+NAs <- do.call(cbind, lapply(x, function(i) sum(is.na(Raw.Clean[, i] == TRUE))))
+
+# TO DO: Round
+
+```
+
+
+Imputation
+
+Many of the variables contain zeros, some of which are representative of the actual value, others which should be coded as NA. Recoding
+is essential because the zeros will cause distortions during the normalization process and will vias the data. Without recollecting data 
+common sense must be used in recoding the data.
+
+```{r}
+
+# Raw.Cleaned <- Raw.Clean IGNORE
+# Raw.Cleaned -> Raw.Clean IGNORE
+
+# food.safety
+row.names(Raw.Clean[Raw.Clean$food.safety == 0, ])
+  # likely a case of missing data, replace with NA
+Raw.Clean$food.safety[Raw.Clean$food.safety == 0] <- NA
+
+# homicides - it is unlikely that there were no homicides, replace 0 with NA
+Raw.Clean$homicides[Raw.Clean$homicides == 0] <- NA
+row.names(Raw.Clean[is.na(Raw.Clean$homicides), ])
+
+# km.transit 
+row.names(Raw.Clean[Raw.Clean$km.transit == 0, ]) 
+  # these countries have (limited) transit, replace with NA
+Raw.Clean$km.transit[Raw.Clean$km.transit == 0] <- NA
+
+# hrs.transit 
+row.names(Raw.Clean[Raw.Clean$hrs.transit == 0, ]) 
+  # these countries have (limited) transit, replace with NA
+Raw.Clean$hrs.transit[Raw.Clean$hrs.transit == 0] <- NA
+
+# bike.rental
+row.names(Raw.Clean[Raw.Clean$bike.rental == 0, ]) 
+  # feasible that (some of) these are zero, left unchanged
+
+# km.bike.path
+row.names(Raw.Clean[Raw.Clean$km.bike.path == 0, ]) 
+  # feasible that (some of) these are zero, left unchanged
+
+# commute.time.transit
+row.names(Raw.Clean[Raw.Clean$commute.time.transit == 0, ]) 
+  # feasible that this is zero due to transit being unfeasible for commute, left unchanged
+
+# commute.time.transit
+row.names(Raw.Clean[Raw.Clean$transit.app == 0, ]) 
+  # feasible that this is zero, left unchanged
+
+# taxi.rate
+row.names(Raw.Clean[Raw.Clean$taxi.rate == 0, ]) 
+  # these cities have taxis, convert 0's to NA's
+Raw.Clean$taxi.rate[Raw.Clean$taxi.rate == 0] <- NA
+
+# health.clinics
+row.names(Raw.Clean[Raw.Clean$health.clinics == 0, ]) 
+  # these cities have health clinics, convert 0's to NA's
+Raw.Clean$health.clinics[Raw.Clean$health.clinics == 0] <- NA
+
+# sex.health.clinics
+row.names(Raw.Clean[Raw.Clean$sex.health.clinic == 0, ]) 
+  # feasible, left unchanged
+
+# sex.homeless.shelter
+row.names(Raw.Clean[Raw.Clean$homeless.shelter == 0, ]) 
+  # possible, left unchanged
+
+# employment.programs
+row.names(Raw.Clean[Raw.Clean$employment.programs == 0, ]) 
+  # possible, left unchanged
+
+# youth.employment.centers
+row.names(Raw.Clean[Raw.Clean$youth.employment.centers == 0, ]) 
+  # several of these definitely have youth employment centers, convert to NA
+Raw.Clean$youth.employment.centers[Raw.Clean$youth.employment.centers == 0] <- NA
+
+# new.jobs.2013
+row.names(Raw.Clean[Raw.Clean$new.jobs.2013 == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$new.jobs.2013[Raw.Clean$new.jobs.2013 == 0] <- NA
+
+# water.scale
+row.names(Raw.Clean[Raw.Clean$water.scale == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$water.scale[Raw.Clean$water.scale == 0] <- NA
+
+# smart.cities.scale
+row.names(Raw.Clean[Raw.Clean$smart.cities.scale == 0, ]) 
+  # feasible that there  are not policies in place, left unchanged
+
+# qty.recycled.materials
+row.names(Raw.Clean[Raw.Clean$qty.recycled.materials == 0, ]) 
+  # feasible, left unchanged
+
+# qty.annual.waste
+row.names(Raw.Clean[Raw.Clean$qty.annual.waste == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$qty.annual.waste[Raw.Clean$qty.annual.waste == 0] <- NA
+
+# carbon.emissions
+row.names(Raw.Clean[Raw.Clean$carbon.emissions == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$carbon.emissions[Raw.Clean$carbon.emissions == 0] <- NA
+
+#num.recycled.materials
+row.names(Raw.Clean[Raw.Clean$num.recycled.materials == 0, ])
+  # almost certainly a case of missing data
+Raw.Clean$num.recycled.materials[Raw.Clean$num.recycled.materials == 0] <- NA
+  #feasible, left unchanged
+
+#registered.vehicles
+row.names(Raw.Clean[Raw.Clean$registered.vehicles == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$registered.vehicles[Raw.Clean$registered.vehicles == 0] <- NA
+
+# tuition.cost
+row.names(Raw.Clean[Raw.Clean$tuition.cost == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$registered.vehicles[Raw.Clean$tuition.cost == 0] <- NA
+
+# undergrad.enrollment
+row.names(Raw.Clean[Raw.Clean$undergrad.enrollment == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$undergrad.enrollment[Raw.Clean$undergrad.enrollment == 0] <- NA
+
+# student.housing
+row.names(Raw.Clean[Raw.Clean$student.housing == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$student.housing[Raw.Clean$student.housing == 0] <- NA
+
+# student.debt
+row.names(Raw.Clean[Raw.Clean$student.debt == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$student.debt[Raw.Clean$student.debt == 0] <- NA
+
+# employment.initiatives.scale
+row.names(Raw.Clean[Raw.Clean$employment.initiatives.scale == 0, ]) 
+  # possible, left unchanged
+
+# age.register.business
+row.names(Raw.Clean[Raw.Clean$age.register.business == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$age.register.business[Raw.Clean$age.register.business == 0] <- NA
+
+# early.entrepreneurship
+row.names(Raw.Clean[Raw.Clean$early.entrepreneurship == 0, ]) 
+  # possible, left unchanged
+
+# sports.facilities
+row.names(Raw.Clean[Raw.Clean$sports.facilities == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$sports.facilities[Raw.Clean$sports.facilities == 0] <- NA
+
+# business.banking
+row.names(Raw.Clean[Raw.Clean$business.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$business.banking[Raw.Clean$business.banking == 0] <- NA
+
+# personal.banking
+row.names(Raw.Clean[Raw.Clean$personal.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$personal.banking[Raw.Clean$personal.banking == 0] <- NA
+
+# chartered.banks
+row.names(Raw.Clean[Raw.Clean$chartered.banks == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$chartered.banks[Raw.Clean$chartered.banks == 0] <- NA
+
+# online.banking
+row.names(Raw.Clean[Raw.Clean$online.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$online.banking[Raw.Clean$online.banking == 0] <- NA
+
+# mobile.banking
+row.names(Raw.Clean[Raw.Clean$mobile.banking == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$mobile.banking[Raw.Clean$mobile.banking == 0] <- NA
+
+# financial.literacy
+row.names(Raw.Clean[Raw.Clean$financial.literacy == 0, ]) 
+  # possible, left unchanged
+
+# cellular.package.cost
+row.names(Raw.Clean[Raw.Clean$cellular.package.cost == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$cellular.package.cost[Raw.Clean$cellular.package.cost == 0] <- NA
+
+# num.nightclubs
+row.names(Raw.Clean[Raw.Clean$num.nightclubs == 0, ]) 
+  # almost certainly a case of missing data
+Raw.Clean$num.nightclubs[Raw.Clean$num.nightclubs == 0] <- NA
+
+# music.festivals
+row.names(Raw.Clean[Raw.Clean$music.festivals == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$music.festivals[Raw.Clean$music.festivals == 0] <- NA
+
+# graffiti.street.art
+row.names(Raw.Clean[Raw.Clean$graffiti.street.art == 0, ]) 
+  # feasible, left unchanged
+
+# number.pro.sports.teams
+row.names(Raw.Clean[Raw.Clean$number.pro.sports.teams == 0, ]) 
+  # possibly a case of missing data
+Raw.Clean$number.pro.sports.teams[Raw.Clean$number.pro.sports.teams == 0] <- NA
+
+# film.festivals
+row.names(Raw.Clean[Raw.Clean$film.festivals == 0, ]) 
+  # likely a case of missing data
+Raw.Clean$film.festivals[Raw.Clean$film.festivals == 0] <- NA
+
+# councillor.age
+row.names(Raw.Clean[Raw.Clean$councillor.age == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$councillor.age[Raw.Clean$councillor.age == 0] <- NA
+
+# volunteer.opportunities
+row.names(Raw.Clean[Raw.Clean$volunteer.opportunities == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$volunteer.opportunities[Raw.Clean$volunteer.opportunities == 0] <- NA
+
+# youth.advisory.board
+row.names(Raw.Clean[Raw.Clean$youth.advisory.board == 0, ]) 
+  # feasible, left unchanged
+
+# highschool.volunteer
+row.names(Raw.Clean[Raw.Clean$highschool.volunteer == 0, ]) 
+  # left unchanged
+
+# num.restaurants
+row.names(Raw.Clean[Raw.Clean$num.restaurants == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$num.restaurants[Raw.Clean$num.restaurants == 0] <- NA
+
+# last.call.index
+row.names(Raw.Clean[Raw.Clean$last.call.index == 0, ]) 
+  # potentially no legislated last call, left unchanged
+
+# num.food.festival
+row.names(Raw.Clean[Raw.Clean$num.food.festival == 0, ]) 
+  # certainly a case of missing data
+Raw.Clean$num.food.festival[Raw.Clean$num.food.festival == 0] <- NA
+
+# young.designer
+row.names(Raw.Clean[Raw.Clean$young.designer == 0, ]) 
+  # possible, left unchanged
+
+# fashion.incubators
+row.names(Raw.Clean[Raw.Clean$fashion.incubators == 0, ]) 
+  # possible, left unchanged
+
+# design.schools
+row.names(Raw.Clean[Raw.Clean$design.schools == 0, ]) 
+  # possible, left unchanged
+
+```
+
+Preparing for imputation
+
+```{r}
+
+# population and region maybe be useful for the imputation algorithm, so they will be attached to the raw dataset here. 
+
+data.full <- cbind(Raw.Clean, LU.Population[, 2]) 
+
+
+colnames(data.full)[101] <- "Population"
+
+data.full <- cbind(data.full, LU.Country.Region[, 2])
+
+colnames(data.full)[102] <- "Region"
+
+
+data.full$Population <- as.numeric(as.character((data.full$Population)))
+
+
+```
+
+
+
+Testing current imputation strategy
+
+```{r}
+
+usePackage('VIM')
+
+# create a function that is designed to introduce NA's to up to 20% of the column
+
+
+# Imputation Experiment - Insert NAs
+#---------------------------------
+
+insert_nas <- function(x) {
+  len <- length(x)
+  n <- sample(1:floor(0.2*len), 1)
+  i <- sample(1:len, n)
+  x[i] <- NA 
+  x
+}
+
+
+data.NA <- as.data.frame(apply(data.full[1:100], 2, function(x) insert_nas(x)))
+data.NA[, c("Population", "Region")] <- data.full[,c("Population", "Region")]
+
+
+
+
+########### ALL ##############
+
+m.impute <- data.frame()
+
+for (c in 1:ncol(data.NA)) {
+
+  for (r in 1:length(data.NA[, c])) {
+
+    if (is.na(data.NA[r,c])) {     # if it is NA, continue
+      
+      m.impute[r,c] <- as.numeric(mean(data.full[data.full$Region == data.full[r, "Region"], c], na.rm = TRUE))
+
+    } else {  #if not NA, keep the same as original dataset
+      m.impute[r, c] <- as.numeric(data.full[r, c])
+      
+      
+    }
+  }
+}
+
+
+length(which(is.na(m.impute)))
+
+
+# mean(data.full$food.safety[
+#   data.full$Region == 
+#     data.full[4, "Region"]], na.rm = TRUE)
+
+
+
+
+
+
+########### KNN ALL ############
+
+usePackage("VIM")
+usePackage("ggplot2")
+
+k.impute <- list()
+
+for (i in 1:100){
+  df <- as.data.frame(data.NA[ ,c(i, 101, 102)])
+  vec <- kNN(df, 1, k = 4)
+  k.impute[[i]] <- vec[, 1]
+}
+
+
+k.impute <- do.call("cbind",k.impute)
+k.impute <- as.data.frame(k.impute)
+
+
+length(which(is.na(k.impute)))
+
+####### Comparison ALL ############
+
+range <- apply(data.NA[ ,1:100], 2, function(x) max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+
+# m.impute
+mse.m <- (m.impute[ ,1:100] - data.full[ ,1:100])^2
+mse.m <- apply(mse.m, 2, function(x) sum(x, na.rm = TRUE))
+rmse.m <- sqrt(mse.m)
+nrmse.m <- rmse.m/range
+
+#k.impute
+
+mse.k <- (k.impute[ ,1:100] - data.full[ ,1:100])^2
+mse.k <- apply(mse.k, 2, function(x) sum(x, na.rm = TRUE))
+rmse.k <- sqrt(mse.k)
+nrmse.k <- rmse.k/range
+
+results <- as.data.frame((cbind(nrmse.m, nrmse.k)))
+
+library(reshape2)
+
+results[,"id"] <- 1:nrow(results)
+
+results.melt <- as.data.frame(melt(results, id.vars = "id"))
+
+dev.off()
+
+g <- ggplot(results.melt, aes(x = id, y = value, colour = variable))
+g + geom_line() + geom_smooth()
+
+
+# looks like mean imputation is better. 
+
+
+
+```
+
+
+
+Imputing the data
+
+```{r}
+data.impute <- data.frame()
+
+for (c in 1:ncol(data.full)) {
+
+  for (r in 1:length(data.full[, c])) {
+
+    if (is.na(data.full[r,c])) {     # if it is NA, continue
+      
+      data.impute[r,c] <- as.numeric(mean(data.full[data.full$Region == data.full[r, "Region"], c], na.rm = TRUE))
+
+    } else {  #if not NA, keep the same as original dataset
+      data.impute[r, c] <- as.numeric(data.full[r, c])
+      
+      
+    }
+  }
+}
+
+colnames(data.impute) <- colnames(data.full)
+row.names(data.impute) <- row.names(data.full)
+
+
+length(which(is.na(data.impute)))
+
+```
+
+
+Setting up Normalization Functions
+
+```{r}
+
+ ### FEATURE SCALING - RESCALING
+
+data.impute.transform <- data.impute
+
+# Normalize Minimize - Reward Smaller Values
+min.norm <- function(col, df) {
+  (1 - ((df[r, col] - 
+      min(df[, col]) ) / 
+              (max(df[, col]) - 
+                        min(df[, col])))) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+
+
+
+# Normalize Maximize - Reward Larger Values
+max.norm <- function(col, df) {
+  (df[r, col] - 
+      min(df[, col]) ) / 
+              (max(df[, col]) - 
+                        min(df[, col])) *
+
+as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == col,  "Weight"])
+}
+
+# Normalize by Population
+
+by.per.capita <- function(col) {
+  (data.impute[r, col] /
+    data.impute[r, "Population"])* 100000
+}
+
+per.capita <- vector()
+
+
+# Normalize by Exchange and Minimum Wage
+
+
+by.exchange <- function(col) {
+  (data.impute[r, col] *
+    LU.Exchange.Wage[r, "Exchange"]) / LU.Exchange.Wage[r, "Minimum.Wage"]
+}
+
+# a function which runs through each row of a given column dividing exchange rate by miniimum wage. 
+
+by.exchange("rental.housing")
+
+  (data.impute[55, "rental.housing"] *
+    LU.Exchange.Wage[55, "Exchange"]) / LU.Exchange.Wage[55, "Minimum.Wage"]
+
+
+# by.exchange(data.impute[, "rental.housing"])
+
+#   (data.impute[20, "rental.housing"] *
+#     LU.Exchange.Wage[20, "Exchange"]) / LU.Exchange.Wage[20, "Minimum.Wage"]
+
+
+
+# Normalize by Population
+
+by.area <- function(col) {
+  (data.impute[r, col] / LU.Exchange.Wage[r, "Area"])
+}
+
+by.area("km.bike.path")
+
+
+----------------------
+
+## SAFETY ##
+  
+# Minimize - Road.Death
+t <- vector()
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("road.death", data.impute)
+  norm.road.death <- t
+}
+
+data.impute.transform[, "road.death"] <- norm.road.death * 100
+
+
+# MAXIMIZE - food.safety
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("food.safety", data.impute)
+  norm.food.safety <- t
+}
+
+data.impute.transform[, "food.safety"] <- norm.food.safety*100
+
+
+# Minimize - Suicide
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("suicides", data.impute)
+  norm.suicides <- t
+}
+
+data.impute.transform[, "suicides"] <- norm.suicides*100
+
+# Minimize - Homicides
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("homicides")
+  homicides.per.capita <- t
+}
+
+data.impute.transform[, "homicides"] <- homicides.per.capita
+
+# minimze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("homicides", data.impute.transform)
+  norm.homicides <- t
+}
+
+data.impute.transform[, "homicides"] <- norm.homicides * 100
+
+
+### AFFORDABILITY ###
+
+# Consumer Tax Rate
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("c.tax.rate", data.impute)
+  norm.c.tax.rate <- t
+}
+
+data.impute.transform[, "c.tax.rate"]  <- norm.c.tax.rate * 100
+
+
+# Exchange Minimized- Rental Housing
+
+  # multiply each cost by respective exhange rate. 
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("rental.housing")
+  rental.housing.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "rental.housing"] <- rental.housing.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("rental.housing", data.impute.transform)
+  norm.rental.housing <- t
+  
+}
+
+data.impute.transform[, "rental.housing"] <- norm.rental.housing *100
+
+
+
+# Exchange Minimized - Gini
+
+data.impute.transform[ ,"gini"] <- data.impute[ ,"gini"] * 
+  100 *
+  as.numeric(LU.Ind.Cat.Weight[
+  LU.Ind.Cat.Weight$Indicator == "gini",  "Weight"])
+
+
+# Exchange Minimized- Cellular Cost
+
+  # multiply each cost by respective exhange rate. 
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cellular.cost")
+  cellular.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "cellular.cost"] <- cellular.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cellular.cost", data.impute.transform)
+  norm.cellular.cost <- t
+  
+}
+
+data.impute.transform[, "cellular.cost"] <- norm.cellular.cost *100
+
+
+
+# Exchange Minimized - Food - 12 Eggs
+
+  # multiply each cost by respective exhange rate. 
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("food.cost")
+  food.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "food.cost"] <- food.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("food.cost", data.impute.transform)
+  norm.food.cost <- t
+  
+}
+
+data.impute.transform[, "food.cost"] <- norm.food.cost *100
+
+
+# Exchange Minimized - Monthly Transit Pass
+
+  # multiply each cost by respective exhange rate. 
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("transit.pass")
+  transit.pass.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "transit.pass"] <- transit.pass.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("transit.pass", data.impute.transform)
+  norm.transit.pass <- t
+  
+}
+
+data.impute.transform[, "transit.pass"] <- norm.transit.pass *100
+
+
+
+# Exchange Minimized - Apartment Purchase COst
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("apt.buy.cost")
+  apt.buy.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "apt.buy.cost"] <- apt.buy.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("apt.buy.cost", data.impute.transform)
+  norm.apt.buy.cost <- t
+  
+}
+
+data.impute.transform[, "apt.buy.cost"] <- norm.apt.buy.cost *100
+
+
+# Exchange Minimized - Toothpaste Cost
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("toothpaste.cost")
+  toothpaste.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "toothpaste.cost"] <- toothpaste.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("toothpaste.cost", data.impute.transform)
+  norm.toothpaste.cost <- t
+  
+}
+
+data.impute.transform[, "toothpaste.cost"] <- norm.toothpaste.cost *100
+
+
+### TRANSIT ###
+
+
+# MAXIMIZE - km.transit
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("km.transit", data.impute)
+  norm.km.transit <- t
+}
+
+data.impute.transform[, "km.transit"] <- norm.km.transit*100
+
+
+# MAXIMIZE - hrs.transit
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("hrs.transit", data.impute)
+  norm.hrs.transit <- t
+}
+
+data.impute.transform[, "hrs.transit"] <- norm.hrs.transit*100
+
+
+### POPULATION ADJUSTED = Public Bike Rental ### 
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("bike.rental")
+  bike.rental.per.capita <- t
+}
+
+data.impute.transform[, "bike.rental"] <- bike.rental.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("bike.rental", data.impute.transform)
+  norm.bike.rental <- t
+}
+
+data.impute.transform[, "bike.rental"] <- norm.bike.rental * 100
+
+
+### AREA ADJUSTED = kms bike path ### 
+
+# by area
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.area("km.bike.path")
+  bike.rental.area <- t
+}
+
+data.impute.transform[, "km.bike.path"] <- bike.rental.area
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("km.bike.path", data.impute.transform)
+  norm.km.bike.path <- t
+}
+
+data.impute.transform[, "km.bike.path"] <- norm.km.bike.path * 100
+
+
+
+### Minimize - Commuter Time Transit
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("commute.time.transit", data.impute)
+  norm.commute.time.transit <- t
+}
+
+data.impute.transform[, "commute.time.transit"] <- norm.commute.time.transit*100
+
+
+### Minimize - Commuter Time Foot
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("commute.time.foot", data.impute)
+  norm.commute.time.foot <- t
+}
+
+data.impute.transform[, "commute.time.foot"] <- norm.commute.time.foot*100
+
+
+
+### Minimize - Commuter Time Airport
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("commute.time.airport", data.impute)
+  norm.commute.time.airport <- t
+}
+
+data.impute.transform[, "commute.time.airport"] <- norm.commute.time.airport*100
+
+
+### Maximize - Transit App
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("transit.app", data.impute)
+  norm.transit.app <- t
+}
+
+data.impute.transform[, "transit.app"] <- norm.transit.app*100
+
+
+### Maximize - Density
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("pop.density", data.impute)
+  norm.pop.density <- t
+}
+
+data.impute.transform[, "pop.density"] <- norm.pop.density*100
+
+
+
+# Exchange Minimized - Taxi Stand Rate
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("taxi.rate")
+  taxi.rate.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "taxi.rate"] <- taxi.rate.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("taxi.rate", data.impute.transform)
+  norm.taxi.rate <- t
+  
+}
+
+data.impute.transform[, "taxi.rate"] <- norm.taxi.rate *100
+
+
+
+### Health
+
+### MAXIMIZE Health Clinics by pop###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("health.clinics")
+  health.clinics.per.capita <- t
+}
+
+data.impute.transform[, "health.clinics"] <- health.clinics.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("health.clinics", data.impute.transform)
+  norm.health.clinics <- t
+}
+
+data.impute.transform[, "health.clinics"] <- norm.health.clinics * 100
+
+### MAXIMIZE Sexual Health Clinics by pop###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("sex.health.clinics")
+  sex.health.clinics.per.capita <- t
+}
+
+data.impute.transform[, "sex.health.clinics"] <- sex.health.clinics.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("sex.health.clinic", data.impute.transform)
+  norm.sex.health.clinic <- t
+}
+
+data.impute.transform[, "sex.health.clinic"] <- norm.sex.health.clinic * 100
+
+
+### MAXIMIZE homeless shelter by pop###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("homeless.shelter")
+  homeless.shelter.per.capita <- t
+}
+
+data.impute.transform[, "homeless.shelter"] <- homeless.shelter.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("homeless.shelter", data.impute.transform)
+  norm.homeless.shelter <- t
+}
+
+data.impute.transform[, "homeless.shelter"] <- norm.homeless.shelter * 100
+
+
+### Maximize - Urban Smoking Scale
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("smoking.scale", data.impute)
+  norm.smoking.scale <- t
+}
+
+data.impute.transform[, "smoking.scale"] <- norm.smoking.scale*100
+
+
+
+
+### MAXIMIZE mental health facilities by pop###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("mental.health.facilities")
+  mental.health.facilities.per.capita <- t
+}
+
+data.impute.transform[, "mental.health.facilities"] <- mental.health.facilities.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("mental.health.facilities", data.impute.transform)
+  norm.mental.health.facilities <- t
+}
+
+data.impute.transform[, "mental.health.facilities"] <- norm.mental.health.facilities * 100
+
+
+### Maximize - Doctor Density
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("doctor.density", data.impute)
+  norm.doctor.density <- t
+}
+
+data.impute.transform[, "doctor.density"] <- norm.doctor.density*100
+
+
+### Travel ###
+
+### Maximize - Cities Connected
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("city.connections.flight", data.impute)
+  norm.city.connections.flight<- t
+}
+
+data.impute.transform[, "city.connections.flight"] <- norm.city.connections.flight*100
+
+
+# Exchange Minimized - Getaway Bus Cost
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("getaway.bus.cost")
+  getaway.bus.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "getaway.bus.cost"] <- getaway.bus.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("getaway.bus.cost", data.impute.transform)
+  getaway.bus.cost <- t
+  
+}
+
+data.impute.transform[, "getaway.bus.cost"] <- getaway.bus.cost *100
+
+
+# Minimize - Getaway Bus Time
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("getaway.bus.time", data.impute)
+  norm.getaway.bus.time <- t
+}
+
+data.impute.transform[, "getaway.bus.time"] <- norm.getaway.bus.time*100
+
+# Minimize - Getaway Bus Freq
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("getaway.bus.freq", data.impute)
+  norm.getaway.bus.freq <- t
+}
+
+data.impute.transform[, "getaway.bus.freq"] <- norm.getaway.bus.freq*100
+
+
+# Exchange Minimized - Getaway Plane Cost
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("getaway.plane.cost")
+  getaway.plane.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "getaway.plane.cost"] <- getaway.plane.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("getaway.plane.cost", data.impute.transform)
+  getaway.plane.cost <- t
+  
+}
+
+data.impute.transform[, "getaway.plane.cost"] <- getaway.plane.cost *100
+
+
+# Minimize - Getaway Plane Time
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("getaway.plane.time", data.impute)
+  norm.getaway.plane.time <- t
+}
+
+data.impute.transform[, "getaway.plane.time"] <- norm.getaway.plane.time*100
+
+# Minimize - Getaway Bus Freq
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("getaway.plane.freq", data.impute)
+  norm.getaway.plane.freq <- t
+}
+
+data.impute.transform[, "getaway.plane.freq"] <- norm.getaway.plane.freq*100
+
+
+# Exchange Minimized - Hostel Stay
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("hostel.stay")
+  hostel.stay.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "hostel.stay"] <- hostel.stay.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("hostel.stay", data.impute.transform)
+  norm.hostel.stay <- t
+  
+}
+
+data.impute.transform[, "hostel.stay"] <- norm.hostel.stay *100
+
+
+### EMPLOYMENT ####
+
+# Minimize - Youth Unemployment
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("unemployment.youth", data.impute)
+  norm.unemployment.youth <- t
+}
+
+data.impute.transform[, "unemployment.youth"] <- norm.unemployment.youth*100
+
+
+# Maximize - Employment Initiatives
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("employment.programs", data.impute)
+  norm.employment.programs <- t
+}
+
+data.impute.transform[, "employment.programs"] <- norm.employment.programs*100
+
+### MAXIMIZE Youth Employment Centers pop###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("youth.employment.centers")
+  youth.employment.centers.per.capita <- t
+}
+
+data.impute.transform[, "youth.employment.centers"] <- youth.employment.centers.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("youth.employment.centers", data.impute.transform)
+  norm.youth.employment.centers <- t
+}
+
+data.impute.transform[, "youth.employment.centers"] <- norm.youth.employment.centers * 100
+
+
+### MAXIMIZE Number of New Jobs Created 2013###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("new.jobs.2013")
+  new.jobs.2013.per.capita <- t
+}
+
+data.impute.transform[, "new.jobs.2013"] <- new.jobs.2013.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("new.jobs.2013", data.impute.transform)
+  norm.new.jobs.2013 <- t
+}
+
+data.impute.transform[, "new.jobs.2013"] <- norm.new.jobs.2013 * 100
+
+
+## ENVIRONMENT ###
+
+# maximze water scale
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("water.scale", data.impute.transform)
+  norm.water.scale <- t
+}
+
+data.impute.transform[, "water.scale"] <- norm.water.scale * 100
+
+
+# maximze smart cities scale
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("smart.cities.scale", data.impute.transform)
+  norm.smart.cities.scale <- t
+}
+
+data.impute.transform[, "smart.cities.scale"] <- norm.smart.cities.scale * 100
+
+
+### MAXIMIZE Quantity of Recycled Materials###
+
+# per capita
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("qty.recycled.materials")
+  qty.recycled.materials.per.capita <- t
+}
+
+data.impute.transform[, "qty.recycled.materials"] <- qty.recycled.materials.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("qty.recycled.materials", data.impute.transform)
+  norm.qty.recycled.materials <- t
+}
+
+data.impute.transform[, "qty.recycled.materials"] <- norm.qty.recycled.materials * 100
+
+# Minimize Quantity of Recycled Materials###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("qty.annual.waste")
+  qty.annual.waste.per.capita <- t
+}
+
+data.impute.transform[, "qty.annual.waste"] <- qty.annual.waste.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("qty.annual.waste", data.impute.transform)
+  norm.qty.annual.waste <- t
+}
+
+data.impute.transform[, "qty.annual.waste"] <- norm.qty.annual.waste * 100
+
+
+# Minimize Carbon Emissions ###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("carbon.emissions")
+  carbon.emissions.per.capita <- t
+}
+
+data.impute.transform[, "carbon.emissions"] <- carbon.emissions.per.capita
+
+
+# maximze
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("carbon.emissions", data.impute.transform)
+  norm.carbon.emissions <- t
+}
+
+data.impute.transform[, "carbon.emissions"] <- norm.carbon.emissions * 100
+
+
+
+# Maximze Number of Recycled Materials
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.recycled.materials", data.impute.transform)
+  norm.num.recycled.materials <- t
+}
+
+
+data.impute.transform[, "num.recycled.materials"] <- norm.num.recycled.materials * 100
+
+
+
+# Minimize Regstered Vehicles ###
+
+# per capita
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("registered.vehicles")
+  registered.vehicles.per.capita <- t
+}
+
+data.impute.transform[, "registered.vehicles"] <- registered.vehicles.per.capita
+
+
+# minimize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("registered.vehicles", data.impute.transform)
+  norm.registered.vehicles <- t
+}
+
+data.impute.transform[, "registered.vehicles"] <- norm.registered.vehicles * 100
+
+
+
+### Education
+
+# Maximize post secondary institutions per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("post.secondary.institutions")
+  post.secondary.institutions.per.capita <- t
+}
+
+data.impute.transform[, "post.secondary.institutions"] <- post.secondary.institutions.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("post.secondary.institutions", data.impute.transform)
+  norm.post.secondary.institutions <- t
+}
+
+data.impute.transform[, "post.secondary.institutions"] <- norm.post.secondary.institutions * 100
+
+
+# Exchange Minimized - Tuition
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("tuition.cost")
+  tuition.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "tuition.cost"] <- tuition.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("tuition.cost", data.impute.transform)
+  norm.tuition.cost <- t
+  
+}
+
+data.impute.transform[, "tuition.cost"] <- norm.tuition.cost *100
+
+
+# Maximize post secondary enrollment per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("undergrad.enrollment")
+  undergrad.enrollment.per.capita <- t
+}
+
+data.impute.transform[, "undergrad.enrollment"] <- undergrad.enrollment.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("undergrad.enrollment", data.impute.transform)
+  norm.undergrad.enrollment <- t
+}
+
+data.impute.transform[, "undergrad.enrollment"] <- norm.undergrad.enrollment * 100
+
+
+# Exchange Minimized - Student Housing Cost
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("student.housing")
+  student.housing.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "student.housing"] <- student.housing.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("student.housing", data.impute.transform)
+  norm.student.housing <- t
+  
+}
+
+data.impute.transform[, "student.housing"] <- norm.student.housing * 100
+
+
+# Exchange Minimized - Student Debt
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("student.debt")
+  student.debt.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "student.debt"] <- student.debt.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("student.debt", data.impute.transform)
+  norm.student.debt <- t
+  
+}
+
+data.impute.transform[, "student.debt"] <- norm.student.debt * 100
+
+
+### Entrepreneurship
+
+# max employment initiatives scale
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("employment.initiatives.scale", data.impute.transform)
+  norm.employment.initiatives.scale <- t
+}
+
+data.impute.transform[, "employment.initiatives.scale"] <- norm.employment.initiatives.scale * 100
+
+# minimize age register business
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("age.register.business", data.impute.transform)
+  norm.age.register.business <- t
+}
+
+data.impute.transform[, "age.register.business"] <- norm.age.register.business * 100
+
+# max age register business
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.incubators", data.impute.transform)
+  norm.num.incubators <- t
+}
+
+data.impute.transform[, "num.incubators"] <- norm.num.incubators * 100
+
+# max early entrepreneurship
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("early.entrepreneurship", data.impute.transform)
+  norm.early.entrepreneurship <- t
+}
+
+data.impute.transform[, "early.entrepreneurship"] <- norm.early.entrepreneurship * 100
+
+# min ease of doing business
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("ease.doing.business", data.impute.transform)
+  norm.ease.doing.business <- t
+}
+
+data.impute.transform[, "ease.doing.business"] <- norm.ase.doing.business * 100
+
+
+### PUBLIC SPACE
+
+
+# Maximize green space per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("green.public.space")
+  green.public.space.per.capita <- t
+}
+
+data.impute.transform[, "green.public.space"] <- green.public.space.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("green.public.space", data.impute.transform)
+  norm.green.public.space <- t
+}
+
+data.impute.transform[, "green.public.space"] <- norm.green.public.space * 100
+
+
+
+
+# Maximize sports facilities per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("sports.facilities")
+  sports.facilities.per.capita <- t
+}
+
+data.impute.transform[, "sports.facilities"] <- sports.facilities.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("public.libraries", data.impute.transform)
+  norm.public.libraries <- t
+}
+
+data.impute.transform[, "public.libraries"] <- norm.public.libraries * 100
+
+
+# Maximize sports facilities per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("public.libraries")
+  public.libraries.per.capita <- t
+}
+
+data.impute.transform[, "public.libraries"] <- public.libraries.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("public.libraries", data.impute.transform)
+  norm.public.libraries <- t
+}
+
+data.impute.transform[, "public.libraries"] <- norm.public.libraries * 100
+
+
+### Financial Services
+
+# Maximize business banking availability
+
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("business.banking", data.impute.transform)
+  norm.business.banking <- t
+}
+
+data.impute.transform[, "business.banking"] <- norm.business.banking * 100
+
+
+# Maximize personal banking availability
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("personal.banking", data.impute.transform)
+  norm.personal.banking <- t
+}
+
+data.impute.transform[, "personal.banking"] <- norm.personal.banking * 100
+
+
+# Maximize number of chartered banks per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("chartered.banks")
+  chartered.banks.per.capita <- t
+}
+
+data.impute.transform[, "chartered.banks"] <- chartered.banks.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("chartered.banks", data.impute.transform)
+  norm.chartered.banks <- t
+}
+
+data.impute.transform[, "chartered.banks"] <- norm.chartered.banks * 100
+
+
+# Maximize online banking
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("online.banking", data.impute.transform)
+  norm.online.banking <- t
+}
+
+data.impute.transform[, "online.banking"] <- norm.online.banking * 100
+
+
+# Maximize mobile banking
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("mobile.banking", data.impute.transform)
+  norm.mobile.banking <- t
+}
+
+data.impute.transform[, "mobile.banking"] <- norm.mobile.banking * 100
+
+# Maximize financial literacy
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("financial.literacy", data.impute.transform)
+  norm.financial.literacy <- t
+}
+
+data.impute.transform[, "financial.literacy"] <- norm.financial.literacy * 100
+
+
+### DIVERSITY
+
+# Maximize voting languages
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("voting.languages", data.impute.transform)
+  norm.voting.languages <- t
+}
+
+data.impute.transform[, "voting.languages"] <- norm.voting.languages * 100
+
+# Maximize food diversity
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("diversity.food", data.impute.transform)
+  norm.diversity.food <- t
+}
+
+data.impute.transform[, "diversity.food"] <- norm.diversity.food * 100
+
+
+# Maximize LGBT Openness
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("openness.lgbtq", data.impute.transform)
+  norm.openness.lgbtq <- t
+}
+
+data.impute.transform[, "openness.lgbtq"] <- norm.openness.lgbtq * 100
+
+
+
+# Maximize Immigrant Openness
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("openness.immigrants", data.impute.transform)
+  norm.openness.immigrants <- t
+}
+
+data.impute.transform[, "openness.immigrants"] <- norm.openness.immigrants * 100
+
+
+# Maximize Religious Diversity
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("diversity.religion", data.impute.transform)
+  norm.diversity.religion <- t
+}
+
+data.impute.transform[, "diversity.religion"] <- norm.diversity.religion * 100
+
+
+# Maximize Global Gender Gap
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("gender.gap.index", data.impute.transform)
+  norm.gender.gap.index <- t
+}
+
+data.impute.transform[, "gender.gap.index"] <- norm.gender.gap.index * 100
+
+
+### Digital Access
+
+# Maximize Cellular Comp
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("cellular.comp", data.impute.transform)
+  norm.cellular.comp <- t
+}
+
+data.impute.transform[, "cellular.comp"] <- norm.cellular.comp * 100
+
+
+# Exchange Minimized - Cellular Package Cost
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cellular.package.cost")
+  cellular.package.cost.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "cellular.package.cost"] <- cellular.package.cost.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cellular.package.cost", data.impute.transform)
+  norm.cellular.package.cost <- t
+  
+}
+
+data.impute.transform[, "cellular.package.cost"] <- norm.cellular.package.cost * 100
+
+
+# Maximize free.wifi
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("free.wifi", data.impute.transform)
+  norm.free.wifi <- t
+}
+
+data.impute.transform[, "free.wifi"] <- norm.free.wifi * 100
+
+# Maximize mobile infrastructure
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("mobile.infrastructure", data.impute.transform)
+  norm.mobile.infrastructure <- t
+}
+
+data.impute.transform[, "mobile.infrastructure"] <- norm.mobile.infrastructure * 100
+
+# Maximize Municipal open data
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("municipal.open.data", data.impute.transform)
+  norm.municipal.open.data <- t
+}
+
+data.impute.transform[, "municipal.open.data"] <- norm.municipal.open.data * 100
+
+
+# Maximize Gamers and Developer Friendliness
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("gamers.developers.scale", data.impute.transform)
+  norm.gamers.developers.scale <- t
+}
+
+data.impute.transform[, "gamers.developers.scale"] <- norm.gamers.developers.scale * 100
+
+
+
+### Music
+
+# Maximize nightclubs
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.nightclubs", data.impute.transform)
+  norm.num.nightclubs <- t
+}
+
+data.impute.transform[, "num.nightclubs"] <- norm.num.nightclubs * 100
+
+# Maximize music festivals
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("music.festivals", data.impute.transform)
+  norm.music.festivals <- t
+}
+
+data.impute.transform[, "music.festivals"] <- norm.music.festivals * 100
+
+
+### Creative Arts
+
+# Maximize Grafitti and street Art
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("graffiti.street.art", data.impute.transform)
+  norm.graffiti.street.art <- t
+}
+
+data.impute.transform[, "graffiti.street.art"] <- norm.graffiti.street.art * 100
+
+### Sports
+
+#Maximize Number of sports teams
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("number.pro.sports.teams", data.impute.transform)
+  norm.number.pro.sports.teams <- t
+}
+
+data.impute.transform[, "number.pro.sports.teams"] <- norm.number.pro.sports.teams * 100
+
+#Maximize Number of sports facilities
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.pro.sports.facilities", data.impute.transform)
+  norm.num.pro.sports.facilities <- t
+}
+
+data.impute.transform[, "num.pro.sports.facilities"] <- norm.num.pro.sports.facilities * 100
+
+
+# Exchange Minimized - Cost of Shorts
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cost.shorts")
+  cost.shorts.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "cost.shorts"] <- cost.shorts.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cost.shorts", data.impute.transform)
+  norm.cost.shorts <- t
+  
+}
+
+data.impute.transform[, "cost.shorts"] <- norm.cost.shorts * 100
+
+
+# Exchange Minimized - Cost of Gym
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cost.gym")
+  cost.gym.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "cost.gym"] <- cost.gym.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cost.gym", data.impute.transform)
+  norm.cost.gym <- t
+  
+}
+
+data.impute.transform[, "cost.gym"] <- norm.cost.gym * 100
+
+
+### Film
+
+# Maximize FIlm Festivals
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("film.festivals", data.impute.transform)
+  norm.film.festivals <- t
+}
+
+data.impute.transform[, "film.festivals"] <- norm.film.festivals * 100
+
+# Exchange Minimized - Cost of a Movie Ticket
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("cost.movie")
+  cost.movie.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "cost.movie"] <- cost.movie.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("cost.movie", data.impute.transform)
+  norm.cost.movie <- t
+  
+}
+
+data.impute.transform[, "cost.movie"] <- norm.cost.movie * 100
+
+
+# Maximize cinema seats per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("cinema.seats")
+  cinema.seats.per.capita <- t
+}
+
+data.impute.transform[, "cinema.seats"] <- cinema.seats.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("cinema.seats", data.impute.transform)
+  norm.cinema.seats <- t
+}
+
+data.impute.transform[, "cinema.seats"] <- norm.cinema.seats * 100
+
+
+### Civic Engagement
+
+# Minimize Voting Age
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("voting.age", data.impute.transform)
+  norm.voting.age <- t
+}
+
+data.impute.transform[, "voting.age"] <- norm.voting.age * 100
+
+# Minimize Councillor Age
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- min.norm("councillor.age", data.impute.transform)
+  norm.councillor.age <- t
+}
+
+data.impute.transform[, "councillor.age"] <- norm.councillor.age * 100
+
+# Maximize Volunteer Opportunities
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("volunteer.opportunities", data.impute.transform)
+  norm.volunteer.opportunities <- t
+}
+
+data.impute.transform[, "volunteer.opportunities"] <- norm.volunteer.opportunities * 100
+
+
+# Maximize Political Influence
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("youth.advisory.board", data.impute.transform)
+  norm.youth.advisory.board <- t
+}
+
+data.impute.transform[, "youth.advisory.board"] <- norm.youth.advisory.board * 100
+
+# Maximize Political Influence
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("highschool.volunteer", data.impute.transform)
+  norm.highschool.volunteer<- t
+}
+
+data.impute.transform[, "highschool.volunteer"] <- norm.highschool.volunteer * 100
+
+
+### Food
+
+# Maximize restaurants per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("num.restaurants")
+  num.restaurants.per.capita <- t
+}
+
+data.impute.transform[, "num.restaurants"] <- num.restaurants.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.restaurants", data.impute.transform)
+  norm.num.restaurants <- t
+}
+
+data.impute.transform[, "num.restaurants"] <- norm.num.restaurants * 100
+
+
+# Maximize Last Call
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("last.call.index", data.impute.transform)
+  norm.last.call.index<- t
+}
+
+data.impute.transform[, "last.call.index"] <- norm.last.call.index * 100
+
+
+# Maximize Food Festivals
+
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("num.food.festival", data.impute.transform)
+  norm.num.food.festival<- t
+}
+
+data.impute.transform[, "num.food.festival"] <- norm.num.food.festival * 100
+
+
+# Exchange Minimized - Cost of Fast Food
+
+  # multiply each cost by respective exhange rate. 
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.exchange ("fast.food")
+  fast.food.exchange <- t
+}
+  
+  # input into new dataframe
+data.impute.transform[, "fast.food"] <- fast.food.exchange
+
+  # normalize new column
+for (r in 1:nrow(data.impute.transform)) {
+  t[r] <- min.norm("fast.food", data.impute.transform)
+  norm.fast.food <- t
+  
+}
+
+data.impute.transform[, "fast.food"] <- norm.fast.food * 100
+
+
+# Fashion
+
+# Maximize young designer showcase
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("young.designer", data.impute.transform)
+  norm.young.designer<- t
+}
+
+data.impute.transform[, "young.designer"] <- norm.young.designer * 100
+
+
+# Maximize young designer showcase
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("fashion.incubators", data.impute.transform)
+  norm.fashion.incubators<- t
+}
+
+data.impute.transform[, "fashion.incubators"] <- norm.fashion.incubators * 100
+
+
+# Maximize fashion schools per capita
+
+for(r in 1:nrow(data.impute)){
+  t[r] <- by.per.capita("design.schools")
+  design.schools.per.capita <- t
+}
+
+data.impute.transform[, "design.schools"] <- design.schools.per.capita
+
+
+# maximize
+for (r in 1:nrow(data.impute)) {
+  t[r] <- max.norm("design.schools", data.impute.transform)
+  norm.design.schools <- t
+}
+
+data.impute.transform[, "design.schools"] <- norm.design.schools * 100
+
+
+
+final.scores <- data.impute.transform[1:100]
+
+
+```
+
+
+Write the final scores into a new csv file for use by the app. 
+
+```{r}
+write.table(final.scores, file = "Final.Ranking.Values.csv", sep = " ", row.names = TRUE, col.names = TRUE)
+```
+
+
+
+```{r}
+totals <- rowSums(final.scores)
+sort(totals, decreasing = TRUE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
