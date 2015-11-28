@@ -1,0 +1,9 @@
+name: test1
+account: kie-g
+server: shinyapps.io
+appId: 66847
+bundleId: 320462
+url: https://kie-g.shinyapps.io/test1
+when: 1448745452.28686
+asMultiple: FALSE
+asStatic: FALSE
