@@ -1,0 +1,43 @@
+Excel Transformations
+
+1. Things from audit sheet
+Master 
+- Row 5: Remove quotations from Row 5 to change from character and fix equation chain. 
+- BA45: Changed to 0
+
+2. Converted all sheets to values only to preserve figures while cleaning. 
+Master 
+- Delete A and B
+- Delete 1
+- Delete names in A
+- Fill in Category names where blank
+- Delete BG
+
+Raw Data
+- Delete A
+- Delete 1, 2
+- C2 = “Category”
+- D1 = “Indicator”
+- D (“Indicator”) moved to A
+- D (“Category”) moved to B
+- C = “Total”
+- C (“Total”) Deleted
+- Row 101 moved to 54
+- Fill in Category Names where blank
+- Delete 102:105
+Attribute Scores
+- Delete 1, 2 
+- Insert to column D
+- D = “Region”
+- C = “Country”
+- Region populated according to legend in A, B
+- Delete A, B
+- Delete X: AC
+
+Weighted Attribute Scores
+
+
+Indicators Attributes Ranking
+- Delete Rows 1 and 2
+Attribute Scores
+- Delete Rows 1 and 2
